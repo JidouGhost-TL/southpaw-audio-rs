@@ -1,0 +1,69 @@
+{
+  "generator": "libmgba.so.0.10 ARM7TDMI",
+  "vectors": [
+    {
+      "name": "echo10512_cold_resampled",
+      "variant": "EchoMixer10512",
+      "bytes": 176,
+      "sha256": "ee09e0cc886a894076bb00d4693278a618616b9abbaa356b640fcbbc7f0a0429",
+      "description": "10,512 Hz 176-sample frame, 24.8 FP step=0x0147, cold echo ring"
+    },
+    {
+      "name": "echo10512_echo_feedback_6frames",
+      "variant": "EchoMixer10512",
+      "bytes": 1056,
+      "sha256": "4fbe012e363c631436a3768d0ee6e79224e61e356649d26efad56edc3c43fd0f",
+      "description": "6 frames (1,056 B) exercising 5-slot ring wrap echo feedback"
+    },
+    {
+      "name": "echo10512_loop_wrap_overflow",
+      "variant": "EchoMixer10512",
+      "bytes": 352,
+      "sha256": "ae4ad1dd5feb64d042f8eed84f998f57c2e11dcf64ae58d4d7cf87651b13a29c",
+      "description": "Looped overshoot + pre-seeded echo ring + wrapping i8 overflow"
+    },
+    {
+      "name": "echo10512_oneshot_decay_tail",
+      "variant": "EchoMixer10512",
+      "bytes": 352,
+      "sha256": "ea1775a651223a696e5561d0a4065ddca922de4cb97b3da6b623fdc9ef1f69f8",
+      "description": "One-shot mid-frame termination + echo feedback decay tail"
+    },
+    {
+      "name": "echo6690_echo_feedback_6frames",
+      "variant": "EchoMixer6690",
+      "bytes": 672,
+      "sha256": "1481edc6dd253fa542b2eff99dec72b3222331a95314fe63a2c677ca9edac312",
+      "description": "6,690 Hz 6 frames (672 B) with 112-sample ring echo wrap"
+    },
+    {
+      "name": "echo6690_oneshot_decay",
+      "variant": "EchoMixer6690",
+      "bytes": 224,
+      "sha256": "c7da242d207d3a3c601ecb5b40dce7e8e7f8a776d6d3c61654751cd4b6b30f7d",
+      "description": "6,690 Hz one-shot termination + echo decay"
+    },
+    {
+      "name": "dualdma_psg50_hw_state",
+      "variant": "DualDmaPsg50",
+      "bytes": 48,
+      "sha256": "ab2d5e841a665a4bf96719b93e63db09f453b000ce44aeea6106ce0dd3e4d06e",
+      "description": "ADME Dual-DMA PSG 50% SOUNDCNT_H + note timers + verbatim DMA-IRQ countdown"
+    },
+    {
+      "name": "dualdma_psg100_hw_state",
+      "variant": "DualDmaPsg100",
+      "bytes": 48,
+      "sha256": "110086b4abc3bbc5cfa9ec42bd2a3b090452eeaa0faff7c185f46658230fb76c",
+      "description": "AGGE Dual-DMA PSG 100% SOUNDCNT_H + note timers + verbatim DMA-IRQ countdown"
+    },
+    {
+      "name": "dualdma_fixedrate_hw_state",
+      "variant": "DualDmaFixedRate",
+      "bytes": 48,
+      "sha256": "0c9236f93ed8c60cf3a46d0a208a3913d99b73185ca382f0d7734c0272cf8599",
+      "description": "ALLP Dual-DMA Fixed-Rate desc[+0x08] timers + SOUNDCNT_H + verbatim DMA-IRQ countdown"
+    }
+  ],
+  "total_bytes": 2976
+}
