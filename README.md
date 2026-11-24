@@ -31,7 +31,7 @@ The **Southpaw GBA Sound Engine** powered **20 commercial Game Boy Advance relea
 
 ## Supported Southpaw Engine Revisions
 
-Auditing all 3,377 GBA ROMs identifies **5 distinct ARM7TDMI/Thumb revisions** spanning **20 commercial titles** (100% coverage via [`SouthpawVersion::detect_from_bytes`]):
+Auditing all 3,377 GBA ROMs identifies **5 distinct ARM7TDMI/Thumb revisions** spanning **20 commercial titles** (100% coverage via `SouthpawVersion::detect_from_bytes`):
 
 | Revision | Corpus Share | Representative Titles | DirectSound A (`DMA1`) | DirectSound B (`DMA2`) | `SOUNDCNT_H` / PSG |
 | --- | ---: | --- | --- | --- | --- |
@@ -70,6 +70,21 @@ Every synthesis and hardware register path in `AccuracySynth` is verified strict
 - **4 `EchoMixer10512` ARM vectors (1,936 bytes)**: Cold-start 24.8 FP resampled frame (`176` bytes), 6-frame 5-slot ring-buffer echo feedback wrap (`1,056` bytes), looped overshoot + pre-seeded echo + wrapping `i8` overflow (`352` bytes), and one-shot mid-frame termination + echo decay tail (`352` bytes).
 - **2 `EchoMixer6690` ARM vectors (896 bytes)**: 6-frame 112-sample ring-buffer echo wrap (`672` bytes) and one-shot termination + echo decay tail (`224` bytes).
 - **3 Dual-DMA ARM vectors (144 bytes)**: `DualDmaPsg50`, `DualDmaPsg100`, and `DualDmaFixedRate` verifying exact `SOUNDCNT_H` gain-bit preservation, note-pitched vs fixed `desc[+0x08]` hardware timers, and verbatim ROM DMA1/DMA2 IRQ block-countdown exhaustion.
+
+---
+
+## Benchmarks
+
+```sh
+cargo bench --bench bench_audio
+```
+
+| Benchmark | Throughput |
+| --- | ---: |
+| `AccuracySynth::mix_echo_10512_frame` (176f) | ~1.68 GSamples/s |
+| `AccuracySynth::mix_echo_6690_frame` (112f) | ~1.64 GSamples/s |
+| `AccuracySynth::service_dma1_irq` (16 blocks) | ~2.22 ns/iter |
+| `StudioSynth::render_voice_f32` (48 kHz Lanczos-3, 1,024f) | ~408.0 MSamples/s |
 
 ---
 

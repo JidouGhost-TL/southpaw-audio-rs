@@ -106,7 +106,7 @@ impl<const N: usize> EchoRingBuffer<N> {
     #[must_use]
     #[inline]
     pub fn current_slot(&self) -> &[u8; N] {
-        &self.slots[self.slot_index]
+        &self.slots[self.slot_index % ECHO_RING_SLOTS]
     }
 }
 

@@ -3,7 +3,7 @@
 use core::fmt;
 
 /// Errors returned when parsing Southpaw sample descriptors or configuring synthesis.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Error {
     /// Input buffer ended before a complete descriptor or PCM payload could be read.

@@ -17,7 +17,7 @@ use crate::voice::{
 
 /// 100% bit-exact ARM7TDMI/Thumb software & hardware DirectSound emulator for all
 /// 5 Southpaw GBA Sound Engine revisions.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct AccuracySynth;
 
 impl AccuracySynth {
@@ -63,7 +63,7 @@ impl AccuracySynth {
         out: &mut [i8; N],
     ) {
         // Advance ring index (matching `cmp r2, #0x10; bne +4; movs r2, #0`)
-        ring.slot_index = if ring.slot_index + 1 >= ECHO_RING_SLOTS {
+        ring.slot_index = if ring.slot_index.saturating_add(1) >= ECHO_RING_SLOTS {
             0
         } else {
             ring.slot_index + 1
@@ -468,6 +468,7 @@ impl StudioSynth {
             || !playback_hz.is_finite()
             || playback_hz <= 0.0
             || !pos_f64.is_finite()
+            || !gain.is_finite()
         {
             return;
         }
@@ -476,7 +477,11 @@ impl StudioSynth {
         }
 
         let step = playback_hz / (self.output_rate_hz as f64);
-        let pan_clamped = pan.clamp(-1.0, 1.0) as f64;
+        let pan_clamped = if pan.is_finite() {
+            pan.clamp(-1.0, 1.0) as f64
+        } else {
+            0.0
+        };
         let angle = (pan_clamped + 1.0) * core::f64::consts::FRAC_PI_4; // [0, pi/2]
         let norm_gain = (gain as f64) / 128.0;
         let gain_l = (norm_gain * cos_const(angle)) as f32;

@@ -23,6 +23,24 @@
 //!     with true equal-power stereo panning.
 //! - **Byte-exact `libmgba` ARM golden tested**: 2,976 / 2,976 output bytes verified strictly
 //!   byte-for-byte (`assert_eq!`) against real ARM7TDMI execution across all 5 engine revisions.
+//!
+//! ## Quickstart
+//!
+//! ```rust
+//! use southpaw_audio::{AccuracySynth, EchoRingBuffer, EchoVoice, ECHO_10512_FRAME_SAMPLES};
+//!
+//! // Raw signed 8-bit PCM waveform (0 = silence)
+//! let pcm: &[u8] = &[0, 32, 64, 96, 127, 96, 64, 32, 0, 224, 192, 160, 128, 160, 192, 224];
+//!
+//! // 10,512 Hz Southpaw Echo-Mixer voice (24.8 fixed-point step = 0x0100 = 1.0x, one-shot)
+//! let mut voice = EchoVoice::from_bytes(0x0100, pcm.len(), None);
+//! let mut ring = EchoRingBuffer::<ECHO_10512_FRAME_SAMPLES>::new();
+//! let mut frame = [0i8; ECHO_10512_FRAME_SAMPLES];
+//!
+//! AccuracySynth::mix_echo_10512_frame(pcm, &mut voice, &mut ring, &mut frame);
+//! assert_eq!(frame[0], 32);
+//! assert!(!voice.is_active());
+//! ```
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![deny(unsafe_code)]
