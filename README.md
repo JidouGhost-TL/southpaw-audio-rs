@@ -24,7 +24,7 @@ The **Southpaw GBA Sound Engine** powered **20 commercial Game Boy Advance relea
 - **Native Sample Table Parser**: Zero-allocation parser (`SouthpawSampleDesc`, `SouthpawSampleView`, `find_sample_table`) for Southpaw's 16-byte Timer0-reloaded PCM8 sample tables.
 - **Dual Synthesis Engines**:
   - **`AccuracySynth`**: 100% bit-exact emulation of all **5** Southpaw ARM7TDMI/Thumb revisions — including the 5-frame ring-buffer Echo-Mixer (`176` samples @ `10,512 Hz` and `112` samples @ `6,690 Hz`) and Dual-DMA `SOUNDCNT_H` / `Timer0` / `Timer1` / DMA-IRQ 16-byte block countdown state machine.
-  - **`StudioSynth`**: Renders at 48,000 Hz, 32-bit floating-point precision with a compile-time 64-phase Lanczos-3 polyphase windowed-sinc LUT (plus general Lanczos-`a` fallback) and true equal-power stereo panning.
+  - **`StudioSynth`**: Renders at 48,000 Hz, 32-bit floating-point precision with a compile-time 1,024-phase Lanczos-3 polyphase windowed-sinc LUT (plus general Lanczos-`a` fallback) and true equal-power stereo panning.
 - **Byte-Exact `libmgba` ARM Golden Tested**: 2,976 / 2,976 output bytes verified strictly byte-for-byte (`assert_eq!`) across all 5 Southpaw engine revisions.
 
 ---
@@ -53,8 +53,8 @@ use southpaw_audio::{AccuracySynth, EchoRingBuffer, EchoVoice, ECHO_10512_FRAME_
 // Raw signed 8-bit PCM waveform (0 = silence)
 let pcm: &[u8] = &[0, 32, 64, 96, 127, 96, 64, 32, 0, 224, 192, 160, 128, 160, 192, 224];
 
-// 10,512 Hz Southpaw Echo-Mixer voice (24.8 fixed-point step = 0x0100 = 1.0x)
-let mut voice = EchoVoice::from_bytes(0x0100, pcm.len(), Some(0));
+// 10,512 Hz Southpaw Echo-Mixer voice (24.8 fixed-point step = 0x0100 = 1.0x, one-shot)
+let mut voice = EchoVoice::from_bytes(0x0100, pcm.len(), None);
 let mut ring = EchoRingBuffer::<ECHO_10512_FRAME_SAMPLES>::new();
 let mut frame = [0i8; ECHO_10512_FRAME_SAMPLES];
 

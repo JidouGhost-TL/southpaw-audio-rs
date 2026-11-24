@@ -4,7 +4,7 @@
 //!    covering both the 5-frame ring-buffer Echo-Mixer (`EchoMixer10512`, `EchoMixer6690`)
 //!    and the Dual-DMA hardware DirectSound + DMA-IRQ block countdown engine
 //!    (`DualDmaPsg50`, `DualDmaPsg100`, `DualDmaFixedRate`).
-//! 2. [`StudioSynth`]: High-fidelity 48,000 Hz `f32` renderer with a compile-time 64-phase
+//! 2. [`StudioSynth`]: High-fidelity 48,000 Hz `f32` renderer with a compile-time 1,024-phase
 //!    Lanczos-3 polyphase windowed-sinc LUT (plus general Lanczos-`a` fallback) and true
 //!    equal-power stereo panning.
 
@@ -17,6 +17,7 @@ use crate::voice::{
 
 /// 100% bit-exact ARM7TDMI/Thumb software & hardware DirectSound emulator for all
 /// 5 Southpaw GBA Sound Engine revisions.
+#[derive(Debug, Clone, Copy, Default)]
 pub struct AccuracySynth;
 
 impl AccuracySynth {
@@ -33,10 +34,12 @@ impl AccuracySynth {
     /// subs r3, r3, r2
     /// ```
     #[must_use]
-    #[inline]
+    #[inline(always)]
     pub const fn echo_feedback_byte(prev: u8) -> i8 {
-        let shifted = (((prev as u32) + 0x81) >> 2) & 0x3F;
-        (shifted as i32 - 0x20) as i8
+        // Exact 8-bit algebraic identity for `((((prev as u32) + 0x81) >> 2) & 0x3F) - 0x20`:
+        // wrapping `prev + 0x81` modulo 256 drops the carry bit at bit 8, which shifts to bit 6
+        // (`0x40`) and is identically discarded by `& 0x3F`. Enables pure 8-bit SIMD vectorization.
+        (prev.wrapping_add(0x81) >> 2).wrapping_sub(0x20) as i8
     }
 
     /// Mix one frame of `N` PCM8 samples through the Southpaw 5-frame ring-buffer
@@ -67,32 +70,94 @@ impl AccuracySynth {
         };
 
         let slot = &mut ring.slots[ring.slot_index];
-        for i in 0..N {
-            let mut acc = Self::echo_feedback_byte(slot[i]);
-            if voice.step_q8 != 0 {
-                let mut next_pos = voice.pos_q8.wrapping_add(voice.step_q8);
-                let mut active = true;
-                if next_pos >= voice.end_q8 {
-                    let overshoot = next_pos.wrapping_sub(voice.end_q8);
-                    if voice.loop_start_q8 == 0 {
-                        voice.step_q8 = 0;
-                        active = false;
-                    } else {
-                        next_pos = voice.loop_start_q8.wrapping_add(overshoot);
-                    }
+        let mut step_q8 = voice.step_q8;
+        let mut pos_q8 = voice.pos_q8;
+        let end_q8 = voice.end_q8;
+        let loop_start_q8 = voice.loop_start_q8;
+        let pcm_len = pcm.len();
+        let safe_end_q8 = (end_q8 as u64).min((pcm_len as u64).saturating_mul(256));
+        let mut idx = 0usize;
+
+        while idx < N {
+            if step_q8 == 0 {
+                // Pure echo-decay tail: branchless 8-bit auto-vectorizable loop.
+                for (s, o) in slot[idx..].iter_mut().zip(&mut out[idx..]) {
+                    let acc = Self::echo_feedback_byte(*s);
+                    *s = acc as u8;
+                    *o = acc;
                 }
-                if active {
-                    voice.pos_q8 = next_pos;
-                    let idx = (next_pos >> 8) as usize;
-                    if idx < pcm.len() {
-                        let sample = pcm[idx] as i8;
-                        acc = acc.wrapping_add(sample);
+                break;
+            }
+
+            let pos_u64 = pos_q8 as u64;
+            let step_u64 = step_q8 as u64;
+            if pos_u64 + step_u64 < safe_end_q8 {
+                let max_k = (safe_end_q8 - 1 - pos_u64) / step_u64;
+                let run = (max_k as usize).min(N - idx);
+                let last_pos = pos_q8 + step_q8 * (run as u32);
+                let src = &pcm[..((last_pos >> 8) as usize) + 1];
+
+                if step_q8 == 0x0100 {
+                    // 1.0x pitch fast path: contiguous slice zip for full SIMD auto-vectorization.
+                    let start_idx = ((pos_q8 + 0x0100) >> 8) as usize;
+                    let pcm_run = &src[start_idx..start_idx + run];
+                    for ((s, o), &b) in slot[idx..idx + run]
+                        .iter_mut()
+                        .zip(&mut out[idx..idx + run])
+                        .zip(pcm_run.iter())
+                    {
+                        let acc = Self::echo_feedback_byte(*s).wrapping_add(b as i8);
+                        *s = acc as u8;
+                        *o = acc;
                     }
+                    pos_q8 = last_pos;
+                } else {
+                    // General pitch interior run: zero loop/end/active branches.
+                    let mut p = pos_q8;
+                    for (s, o) in slot[idx..idx + run]
+                        .iter_mut()
+                        .zip(&mut out[idx..idx + run])
+                    {
+                        p += step_q8;
+                        let sample = src[(p >> 8) as usize] as i8;
+                        let acc = Self::echo_feedback_byte(*s).wrapping_add(sample);
+                        *s = acc as u8;
+                        *o = acc;
+                    }
+                    pos_q8 = p;
+                }
+
+                idx += run;
+                continue;
+            }
+
+            // Boundary / loop-wrap / one-shot-stop single-sample step
+            let mut acc = Self::echo_feedback_byte(slot[idx]);
+            let mut next_pos = pos_q8.wrapping_add(step_q8);
+            let mut active = true;
+            if next_pos >= end_q8 {
+                let overshoot = next_pos.wrapping_sub(end_q8);
+                if loop_start_q8 == 0 {
+                    step_q8 = 0;
+                    active = false;
+                } else {
+                    next_pos = loop_start_q8.wrapping_add(overshoot);
                 }
             }
-            slot[i] = acc as u8;
-            out[i] = acc;
+            if active {
+                pos_q8 = next_pos;
+                let sample_idx = (next_pos >> 8) as usize;
+                if sample_idx < pcm_len {
+                    acc = acc.wrapping_add(pcm[sample_idx] as i8);
+                }
+            }
+            slot[idx] = acc as u8;
+            out[idx] = acc;
+            idx += 1;
         }
+
+        voice.pos_q8 = pos_q8;
+        voice.step_q8 = step_q8;
     }
 
     /// Convenience wrapper for `SouthpawVersion::EchoMixer10512` (`176` samples/frame @ 10,512 Hz).
@@ -257,33 +322,39 @@ impl AccuracySynth {
 // StudioSynth: 48 kHz f32 Compile-Time Lanczos-3 Polyphase LUT + Equal-Power Pan
 // =============================================================================
 
-/// Number of fractional sub-sample phases in the compile-time Lanczos-3 polyphase LUT.
-const LANCZOS3_PHASES: usize = 64;
+/// Number of fractional sub-sample phases in the compile-time Lanczos-3 polyphase LUT
+/// (`1,025 × 6 × 4 = 24.6 KiB`, L1D-cache resident).
+const LANCZOS3_PHASES: usize = 1024;
 
 /// Number of taps per phase for Lanczos-3 (`2 * 3 = 6`).
 const LANCZOS3_TAPS: usize = 6;
 
-/// Compile-time Taylor series approximation of `sin(x)` accurate to `< 1e-13` for `|x| <= 10`.
+/// Pure `#![no_std]` `const fn` sine helper using O(1) range reduction + 13th-order Taylor polynomial.
+#[inline]
 const fn sin_const(mut x: f64) -> f64 {
-    const TWO_PI: f64 = 2.0 * core::f64::consts::PI;
+    const TWO_PI: f64 = core::f64::consts::TAU;
     const PI: f64 = core::f64::consts::PI;
-    while x > PI {
+    const HALF_PI: f64 = core::f64::consts::FRAC_PI_2;
+
+    let k = (x / TWO_PI) as i64;
+    x -= (k as f64) * TWO_PI;
+    if x > PI {
         x -= TWO_PI;
-    }
-    while x < -PI {
+    } else if x < -PI {
         x += TWO_PI;
     }
-    let x2 = x * x;
-    let mut term = x;
-    let mut sum = x;
-    let mut k = 1u32;
-    while k <= 11 {
-        let denom = ((2 * k) * (2 * k + 1)) as f64;
-        term = -term * x2 / denom;
-        sum += term;
-        k += 1;
+    if x > HALF_PI {
+        x = PI - x;
+    } else if x < -HALF_PI {
+        x = -PI - x;
     }
-    sum
+    let r2 = x * x;
+    x * (1.0
+        - r2 * (1.0 / 6.0
+            - r2 * (1.0 / 120.0
+                - r2 * (1.0 / 5_040.0
+                    - r2 * (1.0 / 362_880.0
+                        - r2 * (1.0 / 39_916_800.0 - r2 / 6_227_020_800.0))))))
 }
 
 /// Compile-time `cos(x)` using `sin(x + PI/2)`.
@@ -306,11 +377,11 @@ const fn lanczos_kernel_const(x: f64, a: f64) -> f64 {
     (sin_const(px) / px) * (sin_const(px_a) / px_a)
 }
 
-/// Build the normalized 64-phase × 6-tap Lanczos-3 polyphase filter bank at compile time.
-const fn build_lanczos3_lut() -> [[f32; LANCZOS3_TAPS]; LANCZOS3_PHASES] {
-    let mut lut = [[0.0f32; LANCZOS3_TAPS]; LANCZOS3_PHASES];
+/// Build the normalized 1,024-phase (+1 endpoint) × 6-tap Lanczos-3 polyphase filter bank at compile time.
+const fn build_lanczos3_lut() -> [[f32; LANCZOS3_TAPS]; LANCZOS3_PHASES + 1] {
+    let mut lut = [[0.0f32; LANCZOS3_TAPS]; LANCZOS3_PHASES + 1];
     let mut p = 0usize;
-    while p < LANCZOS3_PHASES {
+    while p <= LANCZOS3_PHASES {
         let frac = (p as f64) / (LANCZOS3_PHASES as f64);
         let mut weights = [0.0f64; LANCZOS3_TAPS];
         let mut sum = 0.0f64;
@@ -333,26 +404,29 @@ const fn build_lanczos3_lut() -> [[f32; LANCZOS3_TAPS]; LANCZOS3_PHASES] {
     lut
 }
 
-/// Compile-time 64-phase × 6-tap normalized Lanczos-3 polyphase filter LUT.
-static LANCZOS3_LUT: [[f32; LANCZOS3_TAPS]; LANCZOS3_PHASES] = build_lanczos3_lut();
+/// Compile-time 1,024-phase × 6-tap normalized Lanczos-3 polyphase filter LUT.
+static LANCZOS3_LUT: [[f32; LANCZOS3_TAPS]; LANCZOS3_PHASES + 1] = build_lanczos3_lut();
 
 /// High-fidelity studio renderer for Southpaw GBA samples (48,000 Hz `f32`,
 /// compile-time Lanczos-3 polyphase windowed-sinc interpolation, equal-power stereo panning).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StudioSynth {
-    /// Target output sample rate in Hz (default: `48_000`).
+    /// Target output sample rate in Hz (default: [`Self::SAMPLE_RATE`] = `48_000`).
     pub output_rate_hz: u32,
-    /// Number of Lanczos sinc lobes (`3` uses the fast compile-time 64-phase polyphase LUT).
+    /// Number of Lanczos sinc lobes (`3` uses the fast compile-time 1,024-phase polyphase LUT).
     pub sinc_lobes: usize,
 }
 
 impl Default for StudioSynth {
     fn default() -> Self {
-        Self::new(48_000)
+        Self::new(Self::SAMPLE_RATE)
     }
 }
 
 impl StudioSynth {
+    /// Standard studio output sample rate (`48_000` Hz).
+    pub const SAMPLE_RATE: u32 = 48_000;
+
     /// Create a new [`StudioSynth`] configured for `output_rate_hz` with Lanczos-3 interpolation.
     #[must_use]
     pub const fn new(output_rate_hz: u32) -> Self {
@@ -387,12 +461,18 @@ impl StudioSynth {
     ) {
         let pcm = sample.pcm;
         let pcm_len = pcm.len();
-        if pcm_len == 0 || self.output_rate_hz == 0 || playback_hz <= 0.0 {
+        let frames = out_l.len().min(out_r.len());
+        if frames == 0
+            || pcm_len == 0
+            || self.output_rate_hz == 0
+            || !playback_hz.is_finite()
+            || playback_hz <= 0.0
+            || !pos_f64.is_finite()
+        {
             return;
         }
-        let frames = out_l.len().min(out_r.len());
-        if frames == 0 {
-            return;
+        if *pos_f64 < 0.0 {
+            *pos_f64 = 0.0;
         }
 
         let step = playback_hz / (self.output_rate_hz as f64);
@@ -410,26 +490,90 @@ impl StudioSynth {
         let loop_start_f = loop_start as f64;
         let loop_len_f = loop_len as f64;
 
-        // Fast path: compile-time 64-phase Lanczos-3 polyphase LUT
+        let out_l = &mut out_l[..frames];
+        let out_r = &mut out_r[..frames];
+
+        // Fast path: compile-time 1,024-phase Lanczos-3 polyphase LUT + Q32.32 interior chunking
         if self.sinc_lobes == 3 {
+            let safe_max_base = pcm_len.saturating_sub(4);
             let mut ph = *pos_f64;
             let mut idx = 0usize;
+
             while idx < frames {
                 if ph >= pcm_len_f {
                     if looped {
-                        ph = loop_start_f + ((ph - loop_start_f) % loop_len_f);
+                        ph -= loop_len_f;
+                        if ph >= pcm_len_f {
+                            ph = loop_start_f + ((ph - loop_start_f) % loop_len_f);
+                        }
+                        if ph < loop_start_f {
+                            ph = loop_start_f;
+                        }
                     } else {
                         break;
                     }
                 }
-                let center = ph as isize;
-                let frac = ph - (center as f64);
-                let phase = ((frac * (LANCZOS3_PHASES as f64)) as usize).min(LANCZOS3_PHASES - 1);
-                let w = &LANCZOS3_LUT[phase];
+
+                let base = ph as usize;
+                if pcm_len >= 6
+                    && base >= 2
+                    && base <= safe_max_base
+                    && safe_max_base < (1usize << 31)
+                    && ph < (1u64 << 31) as f64
+                    && step < (1u64 << 31) as f64
+                {
+                    let safe_limit = (safe_max_base as f64) + 0.999_999;
+                    let max_interior = (((safe_limit - ph) / step) as usize) + 1;
+                    let run = max_interior.min(frames - idx);
+                    if run >= 4 {
+                        const Q32_SCALE: f64 = 4_294_967_296.0;
+                        let ph_q32 = (ph * Q32_SCALE) as u64;
+                        let step_q32 = (step * Q32_SCALE) as u64;
+                        let last_base = ((ph_q32
+                            .saturating_add(step_q32.saturating_mul((run - 1) as u64)))
+                            >> 32) as usize;
+                        if last_base <= safe_max_base {
+                            let src = &pcm[..last_base + 4];
+                            let mut ph_shifted = ph_q32 - (2u64 << 32);
+                            for (ol, or) in out_l[idx..idx + run]
+                                .iter_mut()
+                                .zip(&mut out_r[idx..idx + run])
+                            {
+                                let b0 = (ph_shifted >> 32) as usize;
+                                // Nearest 1,024-phase index in `0..=1024`
+                                let p = (((ph_shifted & 0xFFFF_FFFF) + (1 << 21)) >> 22) as usize;
+                                let w = &LANCZOS3_LUT[p];
+                                let win = &src[b0..b0 + 6];
+                                let s0 = (win[0] as i8) as f32;
+                                let s1 = (win[1] as i8) as f32;
+                                let s2 = (win[2] as i8) as f32;
+                                let s3 = (win[3] as i8) as f32;
+                                let s4 = (win[4] as i8) as f32;
+                                let s5 = (win[5] as i8) as f32;
+                                // Balanced reduction tree halves FMA dependency chain latency
+                                let val = (s0 * w[0] + s1 * w[1])
+                                    + (s2 * w[2] + s3 * w[3])
+                                    + (s4 * w[4] + s5 * w[5]);
+                                *ol += val * gain_l;
+                                *or += val * gain_r;
+                                ph_shifted += step_q32;
+                            }
+                            ph += (run as f64) * step;
+                            idx += run;
+                            continue;
+                        }
+                    }
+                }
+
+                // Boundary / loop-edge single-sample step
+                let frac = ph - (base as f64);
+                let p = ((frac * (LANCZOS3_PHASES as f64) + 0.5) as usize).min(LANCZOS3_PHASES);
+                let w = &LANCZOS3_LUT[p];
 
                 let mut s = [0.0f32; LANCZOS3_TAPS];
+                let base_i = base as isize;
                 for (t, slot) in s.iter_mut().enumerate() {
-                    let k = center + (t as isize) - 2;
+                    let k = base_i + (t as isize) - 2;
                     if k >= 0 {
                         let u = k as usize;
                         if u < pcm_len {
@@ -441,12 +585,9 @@ impl StudioSynth {
                     }
                 }
 
-                let val = s[0] * w[0]
-                    + s[1] * w[1]
-                    + s[2] * w[2]
-                    + s[3] * w[3]
-                    + s[4] * w[4]
-                    + s[5] * w[5];
+                let val = (s[0] * w[0] + s[1] * w[1])
+                    + (s[2] * w[2] + s[3] * w[3])
+                    + (s[4] * w[4] + s[5] * w[5]);
 
                 out_l[idx] += val * gain_l;
                 out_r[idx] += val * gain_r;
@@ -462,7 +603,7 @@ impl StudioSynth {
         let a_f64 = a as f64;
         let mut ph = *pos_f64;
 
-        for (ol, or) in out_l[..frames].iter_mut().zip(out_r[..frames].iter_mut()) {
+        for (ol, or) in out_l.iter_mut().zip(out_r.iter_mut()) {
             if ph >= pcm_len_f {
                 if looped {
                     ph = loop_start_f + ((ph - loop_start_f) % loop_len_f);
@@ -537,7 +678,7 @@ mod tests {
             }
             let expected = ((acc / wsum) as f32) * gain_l;
             assert!(
-                (actual - expected).abs() < 1e-3,
+                (actual - expected).abs() < 1e-4,
                 "LUT mismatch: actual={actual}, expected={expected}"
             );
             ref_pos += step;
@@ -552,5 +693,11 @@ mod tests {
         // Hardware +0x81 bias wrap quirk: +127 -> (0x7F + 0x81) >> 2 = 0x40, & 0x3F = 0 -> -32
         assert_eq!(AccuracySynth::echo_feedback_byte(127), -32);
         assert_eq!(AccuracySynth::echo_feedback_byte((-128i8) as u8), -32);
+
+        // Exhaustively verify 8-bit identity matches the literal 32-bit Thumb register formula
+        for b in 0u8..=255 {
+            let expected = (((((b as u32) + 0x81) >> 2) & 0x3F) as i32 - 0x20) as i8;
+            assert_eq!(AccuracySynth::echo_feedback_byte(b), expected);
+        }
     }
 }

@@ -132,7 +132,7 @@ impl SouthpawSampleDesc {
 }
 
 /// Zero-copy borrowed view of a Southpaw signed 8-bit PCM sample.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SouthpawSampleView<'a> {
     /// Sample index within the descriptor table.
     pub index: u32,
@@ -200,7 +200,7 @@ impl<'a> SouthpawSampleView<'a> {
 
 /// Owned Southpaw signed 8-bit PCM sample (requires `alloc` feature).
 #[cfg(feature = "alloc")]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SouthpawSample {
     /// Sample index within the descriptor table.
     pub index: u32,

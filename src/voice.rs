@@ -14,7 +14,7 @@ pub const ECHO_6690_FRAME_SAMPLES: usize = 112;
 
 /// 24.8 fixed-point resampled voice state for the Southpaw Thumb Echo-Mixer
 /// (`0x0300055C` in *Extreme Ghostbusters* and *Antz: Extreme Racing*).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct EchoVoice {
     /// 24.8 fixed-point playback step per output sample (`0` = voice inactive/stopped).
     pub step_q8: u32,
@@ -40,6 +40,9 @@ impl EchoVoice {
     }
 
     /// Create an active [`EchoVoice`] from byte lengths and a 24.8 fixed-point step.
+    ///
+    /// Note: on Southpaw GBA hardware, `loop_start_q8 == 0` disables looping (one-shot),
+    /// so passing `Some(0)` behaves identically to `None`.
     #[must_use]
     #[inline]
     pub const fn from_bytes(step_q8: u32, pcm_len: usize, loop_start_bytes: Option<usize>) -> Self {
@@ -67,7 +70,7 @@ impl EchoVoice {
 ///
 /// Use `EchoRingBuffer<176>` for [`SouthpawVersion::EchoMixer10512`] and
 /// `EchoRingBuffer<112>` for [`SouthpawVersion::EchoMixer6690`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EchoRingBuffer<const N: usize> {
     /// Five consecutive frame buffers (`0x030000F8..0x03000478` in GBA IWRAM).
     pub slots: [[u8; N]; ECHO_RING_SLOTS],
@@ -108,7 +111,7 @@ impl<const N: usize> EchoRingBuffer<N> {
 }
 
 /// State of one hardware DirectSound DMA-IRQ channel (DMA1/FIFO A or DMA2/FIFO B).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct DirectSoundChannel {
     /// Source ROM pointer (`DMAxSAD`).
     pub dma_sad: u32,
@@ -137,7 +140,7 @@ impl DirectSoundChannel {
 
 /// Complete hardware register & IRQ state for the Southpaw Dual-DMA DirectSound engine
 /// (`DualDmaPsg50`, `DualDmaPsg100`, `DualDmaFixedRate`, and the DMA2 side of Echo-Mixer builds).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DualDmaHardwareState {
     /// Active Southpaw engine revision.
     pub version: SouthpawVersion,
