@@ -88,6 +88,12 @@ cargo bench --bench bench_audio
 
 ---
 
+## Community & Support
+
+Come discuss the wonders of GBA RE, modding, etc. — also the best way to report issues or bugs, or ask for help on your own project: https://discord.gg/khwxFSVNrS
+
+---
+
 ## License
 
 Licensed under either of:
